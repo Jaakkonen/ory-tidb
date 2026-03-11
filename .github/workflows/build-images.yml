@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# build-images.yml — build and push ghcr.io images for all three TiDB-patched
+# Ory components (Kratos, Keto, Hydra).
+#
+# Triggered on:
+#   - push to main (submodule pointer update → new component commit landed)
+#   - manual workflow_dispatch (rebuild on demand)
+#   - weekly schedule (keep images fresh even without code changes)
+#
+# Each component is built in parallel as a separate matrix job.
+# Images are tagged with both the git SHA of the component submodule and
+# "latest" (on main branch only).
+#
+# Image names:
+#   ghcr.io/<owner>/ory-tidb-kratos:<sha>
+#   ghcr.io/<owner>/ory-tidb-keto:<sha>
+#   ghcr.io/<owner>/ory-tidb-hydra:<sha>
+
+name: build-images
+
+on:
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "0 5 * * 1"   # weekly Monday 05:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: kratos
+            dockerfile: .docker/Dockerfile-build
+            build_args: |
+              VERSION=${{ github.sha }}
+              COMMIT=${{ github.sha }}
+              BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+          - component: keto
+            dockerfile: .docker/Dockerfile-build
+            build_args: ""
+
+          - component: hydra
+            # Dockerfile-local-build uses -tags sqlite (static CGO) which
+            # conflicts with our nosqlite CanHandle path. We use a minimal
+            # inline Dockerfile instead — see the "Create Dockerfile" step.
+            dockerfile: .docker/Dockerfile-tidb
+            build_args: ""
+
+    steps:
+      - name: Checkout ory-tidb (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get component SHA
+        id: sha
+        run: |
+          sha=$(git -C ${{ matrix.component }} rev-parse HEAD)
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      # Hydra: create a minimal Dockerfile that builds without -tags sqlite
+      # so that registry_nosqlite.go (alwaysCanHandle includes tidb) is used.
+      - name: Create Hydra Dockerfile
+        if: matrix.component == 'hydra'
+        run: |
+          cat > hydra/.docker/Dockerfile-tidb <<'EOF'
+          FROM golang:1.25 AS builder
+          WORKDIR /go/src/github.com/ory/hydra
+          COPY oryx/go.mod oryx/go.mod
+          COPY oryx/go.sum oryx/go.sum
+          RUN apt-get update && apt-get upgrade -y && \
+              mkdir -p ./internal/httpclient
+          COPY go.mod go.sum ./
+          COPY internal/httpclient/go.* ./internal/httpclient/
+          ENV CGO_ENABLED=0
+          RUN go mod download
+          COPY . .
+          RUN go build -ldflags="-s -w" -o /usr/bin/hydra
+          FROM gcr.io/distroless/static-debian12:nonroot AS runner
+          COPY --from=builder /usr/bin/hydra /usr/bin/hydra
+          EXPOSE 4444 4445
+          ENTRYPOINT ["hydra"]
+          CMD ["serve", "all"]
+          EOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.component }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.component }}
+          file: ${{ matrix.component }}/${{ matrix.dockerfile }}
+          push: true
+          build-args: ${{ matrix.build_args }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/ory-tidb-${{ matrix.component }}:${{ steps.sha.outputs.short }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/ory-tidb-${{ matrix.component }}:latest
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+      - name: Output image ref
+        run: |
+          echo "Built: ${{ env.REGISTRY }}/${{ env.OWNER }}/ory-tidb-${{ matrix.component }}:${{ steps.sha.outputs.short }}"
