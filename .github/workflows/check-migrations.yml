@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: LicenseRef-Proprietary
+# © CRACI Corporation Oy. All rights reserved.
+#
+# check-migrations.yml — CI workflow for the ory-tidb fork repository.
+#
+# Runs on every push and pull request.  Also runs on a weekly schedule so
+# that upstream new migrations are caught promptly even without a PR.
+#
+# Jobs:
+#   check-new-migrations  — fail if any .mysql.up.sql has no .tidb.up.sql
+#   run-migrations        — apply all .tidb.up.sql files against a live TiDB
+#                           (unistore) instance and assert they all succeed
+#   ensure-schema-matches — apply migrations against both MySQL 8.0 and TiDB,
+#                           dump schemas, and assert the diff is empty after
+#                           normalising known cosmetic differences
+
+name: check-migrations
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Weekly on Monday 07:00 UTC — catches upstream releases even without a PR
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Structural check: every .mysql.up.sql must have a .tidb.up.sql ──────
+  check-new-migrations:
+    name: Check new migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check for missing .tidb.up.sql files
+        run: sh scripts/check_new_migrations.sh all
+
+  # ── 2. TiDB migration run ──────────────────────────────────────────────────
+  run-migrations:
+    name: Run migrations (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    needs: check-new-migrations
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [kratos, keto, hydra]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Pull Docker images
+        run: |
+          docker pull pingcap/tidb:v8.5.2
+          docker pull mysql:8.0
+
+      - name: Run ${{ matrix.component }} migrations against TiDB
+        run: RUN_ID=${{ matrix.component }} sh scripts/run_migrations.sh ${{ matrix.component }}
+
+  # ── 3. Schema comparison: TiDB vs MariaDB ─────────────────────────────────
+  ensure-schema-matches:
+    name: Schema match (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    needs: run-migrations
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [kratos, keto, hydra]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Pull Docker images
+        run: |
+          docker pull pingcap/tidb:v8.5.2
+          docker pull mysql:8.0
+
+      - name: Compare ${{ matrix.component }} schema — TiDB vs MySQL 8.0
+        run: RUN_ID=${{ matrix.component }} sh scripts/ensure_schema_matches.sh ${{ matrix.component }}
+
+      - name: Upload schema dumps on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-dumps-${{ matrix.component }}
+          path: ${{ runner.temp }}/schema-dumps-*/
+          retention-days: 7

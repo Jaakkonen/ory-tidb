@@ -1,0 +1,20 @@
+[submodule "kratos"]
+	path = kratos
+	url = https://github.com/jaakkonen/ory-tidb-kratos.git
+	branch = tidb
+[submodule "keto"]
+	path = keto
+	url = https://github.com/jaakkonen/ory-tidb-keto.git
+	branch = tidb
+[submodule "hydra"]
+	path = hydra
+	url = https://github.com/jaakkonen/ory-tidb-hydra.git
+	branch = tidb
+[submodule "pop"]
+	path = pop
+	url = https://github.com/jaakkonen/ory-tidb-pop.git
+	branch = tidb
+[submodule "x"]
+	path = x
+	url = https://github.com/jaakkonen/ory-tidb-x.git
+	branch = tidb
