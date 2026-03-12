@@ -32,7 +32,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  OWNER: ${{ github.repository_owner }}
 
 jobs:
   build:
@@ -69,6 +68,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Compute lowercase owner
+        id: owner
+        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Get component SHA
         id: sha
@@ -120,11 +123,11 @@ jobs:
           push: true
           build-args: ${{ matrix.build_args }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/ory-tidb-${{ matrix.component }}:${{ steps.sha.outputs.short }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/ory-tidb-${{ matrix.component }}:latest
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/ory-tidb-${{ matrix.component }}:${{ steps.sha.outputs.short }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/ory-tidb-${{ matrix.component }}:latest
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
       - name: Output image ref
         run: |
-          echo "Built: ${{ env.REGISTRY }}/${{ env.OWNER }}/ory-tidb-${{ matrix.component }}:${{ steps.sha.outputs.short }}"
+          echo "Built: ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/ory-tidb-${{ matrix.component }}:${{ steps.sha.outputs.short }}"
