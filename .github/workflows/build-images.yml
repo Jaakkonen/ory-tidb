@@ -57,10 +57,7 @@ jobs:
             build_args: ""
 
           - component: hydra
-            # Dockerfile-local-build uses -tags sqlite (static CGO) which
-            # conflicts with our nosqlite CanHandle path. We use a minimal
-            # inline Dockerfile instead — see the "Create Dockerfile" step.
-            dockerfile: .docker/Dockerfile-tidb
+            dockerfile: .docker/Dockerfile-local-build
             build_args: ""
 
     steps:
@@ -80,33 +77,6 @@ jobs:
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
           echo "short=${sha:0:12}" >> "$GITHUB_OUTPUT"
 
-      # Hydra: create a minimal Dockerfile that builds without -tags sqlite
-      # so that registry_nosqlite.go (alwaysCanHandle includes tidb) is used.
-      - name: Create Hydra Dockerfile
-        if: matrix.component == 'hydra'
-        run: |
-          cat > hydra/.docker/Dockerfile-tidb <<'EOF'
-          FROM golang:1.25 AS builder
-          WORKDIR /go/src/github.com/ory/hydra
-          COPY oryx/go.mod oryx/go.mod
-          COPY oryx/go.sum oryx/go.sum
-          COPY pop/go.mod pop/go.mod
-          COPY pop/go.sum pop/go.sum
-          RUN apt-get update && apt-get upgrade -y && \
-              mkdir -p ./internal/httpclient
-          COPY go.mod go.sum ./
-          COPY internal/httpclient/go.* ./internal/httpclient/
-          ENV CGO_ENABLED=0
-          RUN go mod download
-          COPY . .
-          RUN go build -ldflags="-s -w" -o /usr/bin/hydra
-          FROM gcr.io/distroless/static-debian12:nonroot AS runner
-          COPY --from=builder /usr/bin/hydra /usr/bin/hydra
-          EXPOSE 4444 4445
-          ENTRYPOINT ["hydra"]
-          CMD ["serve", "all"]
-          EOF
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -116,12 +86,6 @@ jobs:
       - name: Test pop TiDB dialect
         working-directory: pop
         run: go test -run "Test_TiDB" -v .
-
-      - name: Tidy go.sum for local pop replace
-        run: |
-          cp -r pop ${{ matrix.component }}/pop
-          cd ${{ matrix.component }}
-          go mod tidy
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -134,9 +98,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.component }}
+        id: build
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.component }}
+          context: .
           file: ${{ matrix.component }}/${{ matrix.dockerfile }}
           push: true
           build-args: ${{ matrix.build_args }}
@@ -145,6 +110,11 @@ jobs:
             ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/ory-tidb-${{ matrix.component }}:latest
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+      - name: Check ${{ matrix.component }} image migrations
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/ory-tidb-${{ matrix.component }}@${{ steps.build.outputs.digest }}"
+          sh scripts/check_image_migrations.sh --only ${{ matrix.component }} --${{ matrix.component }} "${IMAGE}"
 
       - name: Output image ref
         run: |
