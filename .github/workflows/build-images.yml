@@ -113,6 +113,10 @@ jobs:
           go-version-file: ${{ matrix.component }}/go.mod
           cache-dependency-path: ${{ matrix.component }}/go.sum
 
+      - name: Test pop TiDB dialect
+        working-directory: pop
+        run: go test -run "Test_TiDB" -v .
+
       - name: Tidy go.sum for local pop replace
         run: |
           cp -r pop ${{ matrix.component }}/pop
