@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: LicenseRef-Proprietary
+# © CRACI Corporation Oy. All rights reserved.
+#
+# test-tidb.yml — run Hydra, Kratos, and Keto migratest suites against TiDB.
+#
+# Uses TEST_DATABASE_TIDB to bypass dockertest container spinup and connect
+# directly to the TiDB service running in the GitHub Actions job.
+
+name: test-tidb
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "hydra/**"
+      - "kratos/**"
+      - "keto/**"
+      - "x/**"
+      - "pop/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "hydra/**"
+      - "kratos/**"
+      - "keto/**"
+      - "x/**"
+      - "pop/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TEST_DATABASE_TIDB: "tidb://root@127.0.0.1:4000/test?parseTime=true&multiStatements=true"
+
+jobs:
+  test-hydra:
+    name: Hydra — migratest (TiDB)
+    runs-on: ubuntu-latest
+
+    services:
+      tidb:
+        image: pingcap/tidb:v8.5.2
+        ports:
+          - 4000:4000
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: hydra/go.mod
+          cache-dependency-path: hydra/go.sum
+
+      - name: Wait for TiDB
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 4000 -u root --connect-timeout=3 --silent 2>/dev/null; then
+              echo "TiDB ready"; break
+            fi
+            echo "waiting... ($i)"; sleep 2
+          done
+
+      - name: Hydra migratest (TiDB)
+        working-directory: hydra
+        run: go test -tags sqlite -run "TestMigrations/database=tidb" -timeout 20m -v ./persistence/sql/migratest/...
+
+  test-kratos:
+    name: Kratos — migratest (TiDB)
+    runs-on: ubuntu-latest
+
+    services:
+      tidb:
+        image: pingcap/tidb:v8.5.2
+        ports:
+          - 4000:4000
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: kratos/go.mod
+          cache-dependency-path: kratos/go.sum
+
+      - name: Wait for TiDB
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 4000 -u root --connect-timeout=3 --silent 2>/dev/null; then
+              echo "TiDB ready"; break
+            fi
+            echo "waiting... ($i)"; sleep 2
+          done
+
+      - name: Kratos migratest (TiDB)
+        working-directory: kratos
+        run: go test -tags sqlite -run "TestMigrations_TiDB" -timeout 20m -v ./persistence/sql/migratest/...
+
+  test-keto:
+    name: Keto — migratest (TiDB)
+    runs-on: ubuntu-latest
+
+    services:
+      tidb:
+        image: pingcap/tidb:v8.5.2
+        ports:
+          - 4000:4000
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: keto/go.mod
+          cache-dependency-path: keto/go.sum
+
+      - name: Wait for TiDB
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 4000 -u root --connect-timeout=3 --silent 2>/dev/null; then
+              echo "TiDB ready"; break
+            fi
+            echo "waiting... ($i)"; sleep 2
+          done
+
+      - name: Keto migratest (TiDB)
+        working-directory: keto
+        run: go test -tags sqlite -run "TestMigrations" -timeout 20m -v ./internal/persistence/sql/migrations/migratest/...
