@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: LicenseRef-Proprietary
+# © CRACI Corporation Oy. All rights reserved.
+#
+# test-pop.yml — run unit tests for the TiDB pop dialect.
+#
+# Triggered on any change to the pop/ submodule so dialect regressions are
+# caught immediately, independently of the (slower) image build workflow.
+
+name: test-pop
+
+on:
+  push:
+    paths:
+      - "pop/**"
+  pull_request:
+    paths:
+      - "pop/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test pop TiDB dialect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: pop/go.mod
+          cache-dependency-path: pop/go.sum
+
+      - name: Run TiDB dialect unit tests
+        working-directory: pop
+        run: go test -run "Test_TiDB" -v .

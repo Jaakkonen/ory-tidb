@@ -77,16 +77,6 @@ jobs:
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
           echo "short=${sha:0:12}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: ${{ matrix.component }}/go.mod
-          cache-dependency-path: ${{ matrix.component }}/go.sum
-
-      - name: Test pop TiDB dialect
-        working-directory: pop
-        run: go test -run "Test_TiDB" -v .
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
