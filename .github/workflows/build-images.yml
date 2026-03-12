@@ -104,6 +104,9 @@ jobs:
       - name: Check ${{ matrix.component }} image migrations
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/ory-tidb-${{ matrix.component }}@${{ steps.build.outputs.digest }}"
+          docker pull "${IMAGE}"
+          docker pull pingcap/tidb:v8.5.2
+          docker pull mysql:8.0
           sh scripts/check_image_migrations.sh --only ${{ matrix.component }} --${{ matrix.component }} "${IMAGE}"
 
       - name: Output image ref
