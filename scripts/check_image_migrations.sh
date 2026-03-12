@@ -110,15 +110,14 @@ create_db() {
     -e "CREATE DATABASE IF NOT EXISTS \`${db}\`;" >/dev/null 2>&1
 }
 
-# Run "migrate sql up <DSN> --yes" inside $image against the TiDB container.
-# $entrypoint is the binary name (kratos / keto / hydra).
-# DSN is passed as a positional argument — "migrate sql up" does not support
-# the -e/--read-from-env flag; that flag only exists on "migrate sql status".
+# run_migrate LABEL IMAGE DB CMD...
+# Runs CMD... inside IMAGE on the TiDB network, with DSN env var set.
+# CMD is the full migrate command for the binary — differs per component.
 run_migrate() {
   label="$1"
   image="$2"
   db="$3"
-  entrypoint="$4"
+  shift 3  # remaining args are the command to run inside the container
 
   log "Testing ${label} migration (image: ${image})..."
   create_db "$db"
@@ -130,9 +129,9 @@ run_migrate() {
   set +e
   output=$(docker run --rm \
     --network "${TIDB_NETWORK}" \
-    --entrypoint "${entrypoint}" \
+    -e "DSN=${dsn}" \
     "${image}" \
-    migrate sql up "${dsn}" --yes 2>&1)
+    "$@" 2>&1)
   rc=$?
   set -e
 
@@ -152,28 +151,52 @@ start_tidb
 
 total_errors=0
 
-run_component() {
-  label="$1"; image="$2"; db="$3"; binary="$4"
-  run_migrate "$label" "$image" "$db" "$binary" || total_errors=$((total_errors + 1))
+run_kratos() { run_migrate "Kratos" "$KRATOS_IMAGE" "kratos" migrate sql up -e --yes || total_errors=$((total_errors + 1)); }
+run_hydra()  { run_migrate "Hydra"  "$HYDRA_IMAGE"  "hydra"  migrate sql up -e --yes || total_errors=$((total_errors + 1)); }
+
+# Keto uses a config-file-based driver — DSN env alone is not enough; it
+# requires at least one config file to exist. Write a minimal one to a tmpfile
+# and mount it into the container via -v.
+run_keto() {
+  label="Keto"
+  image="$KETO_IMAGE"
+  db="keto"
+
+  log "Testing ${label} migration (image: ${image})..."
+  create_db "$db"
+
+  dsn="tidb://root@${TIDB_CONTAINER}:4000/${db}"
+
+  cfg=$(mktemp)
+  printf 'dsn: "%s"\nnamespaces: []\n' "${dsn}" > "${cfg}"
+  chmod 644 "${cfg}"
+
+  set +e
+  output=$(docker run --rm \
+    --network "${TIDB_NETWORK}" \
+    -v "${cfg}:/tmp/keto.yml:ro" \
+    "${image}" \
+    migrate up --yes -c /tmp/keto.yml 2>&1)
+  rc=$?
+  set -e
+
+  rm -f "${cfg}"
+
+  if [ $rc -eq 0 ]; then
+    pass "$label"
+  else
+    fail "$label (exit $rc)"
+    printf '%s\n' "$output" | head -20 | sed 's/^/    /'
+    total_errors=$((total_errors + 1))
+  fi
 }
 
 case "${ONLY:-all}" in
-  kratos)
-    run_component "Kratos" "$KRATOS_IMAGE" "kratos" "kratos"
-    ;;
-  keto)
-    run_component "Keto"   "$KETO_IMAGE"   "keto"   "keto"
-    ;;
-  hydra)
-    run_component "Hydra"  "$HYDRA_IMAGE"  "hydra"  "hydra"
-    ;;
-  all)
-    run_component "Kratos" "$KRATOS_IMAGE" "kratos" "kratos"
-    run_component "Keto"   "$KETO_IMAGE"   "keto"   "keto"
-    run_component "Hydra"  "$HYDRA_IMAGE"  "hydra"  "hydra"
-    ;;
-  *)
-    printf 'Unknown component: %s\n' "$ONLY" >&2; exit 1 ;;
+  kratos) run_kratos ;;
+  keto)   run_keto   ;;
+  hydra)  run_hydra  ;;
+  all)    run_kratos; run_keto; run_hydra ;;
+  *)      printf 'Unknown component: %s\n' "$ONLY" >&2; exit 1 ;;
 esac
 
 if [ "$total_errors" -eq 0 ]; then
