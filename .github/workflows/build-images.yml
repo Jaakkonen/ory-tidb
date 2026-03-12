@@ -90,6 +90,8 @@ jobs:
           WORKDIR /go/src/github.com/ory/hydra
           COPY oryx/go.mod oryx/go.mod
           COPY oryx/go.sum oryx/go.sum
+          COPY pop/go.mod pop/go.mod
+          COPY pop/go.sum pop/go.sum
           RUN apt-get update && apt-get upgrade -y && \
               mkdir -p ./internal/httpclient
           COPY go.mod go.sum ./
@@ -104,6 +106,18 @@ jobs:
           ENTRYPOINT ["hydra"]
           CMD ["serve", "all"]
           EOF
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.component }}/go.mod
+          cache-dependency-path: ${{ matrix.component }}/go.sum
+
+      - name: Tidy go.sum for local pop replace
+        run: |
+          cp -r pop ${{ matrix.component }}/pop
+          cd ${{ matrix.component }}
+          go mod tidy
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
